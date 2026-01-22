@@ -21,9 +21,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # Outputs
-outputs/
 *.png
 !assets/*.png
+!outputs/*.png
 !assets/*.JPG
 
 # IDE
