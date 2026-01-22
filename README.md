@@ -48,7 +48,7 @@ npm run dev
 ```
 
 ### 3. Use the App
-1. Open `http://localhost:5173` in your browser
+1. Open `http://localhost:3000` in your browser
 2. Upload a **foreground image** (subject will be auto-extracted)
 3. Upload a **background image**
 4. Optionally upload a **depth map** (grayscale) for shadow warping
