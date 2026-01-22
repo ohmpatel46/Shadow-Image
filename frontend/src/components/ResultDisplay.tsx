@@ -1,5 +1,4 @@
 import React from 'react';
-import { api } from '../services/api';
 
 interface ResultDisplayProps {
   compositeUrl?: string | null;
@@ -27,35 +26,8 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({
     return (
       <div className="result-display loading">
         <div className="spinner"></div>
-        <p>Processing images...</p>
-        <style>{`
-          .result-display.loading {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 60px 20px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            backdrop-filter: blur(10px);
-          }
-          .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid rgba(255, 255, 255, 0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-          }
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-          .result-display.loading p {
-            color: white;
-            margin-top: 20px;
-            font-size: 16px;
-          }
-        `}</style>
+        <p>Processing...</p>
+        <style>{styles}</style>
       </div>
     );
   }
@@ -63,117 +35,153 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({
   if (!compositeUrl) {
     return (
       <div className="result-display empty">
-        <p>Upload images and click "Generate Shadow" to see results</p>
-        <style>{`
-          .result-display.empty {
-            padding: 60px 20px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            backdrop-filter: blur(10px);
-            text-align: center;
-          }
-          .result-display.empty p {
-            color: rgba(255, 255, 255, 0.7);
-            font-size: 16px;
-          }
-        `}</style>
+        <div className="empty-icon">🖼️</div>
+        <p>Upload images and generate to see results</p>
+        <style>{styles}</style>
       </div>
     );
   }
 
   return (
-    <div className="result-display">
+    <div className="result-display has-results">
       <h3 className="results-title">Results</h3>
       
-      <div className="result-grid">
-        <div className="result-item">
-          <h4>Composite</h4>
-          <img src={compositeUrl} alt="Composite" className="result-image" />
+      <div className="main-result">
+        <div className="result-header">
+          <span>Composite</span>
           <button
-            className="download-button"
+            className="download-btn"
             onClick={() => handleDownload(compositeUrl, 'composite.png')}
           >
-            Download
+            ⬇ Download
           </button>
+        </div>
+        <img src={compositeUrl} alt="Composite" className="result-image main" />
+      </div>
+
+      <div className="secondary-results">
+        <div className="result-item">
+          <div className="result-header">
+            <span>Shadow</span>
+            <button
+              className="download-btn small"
+              onClick={() => shadowOnlyUrl && handleDownload(shadowOnlyUrl, 'shadow_only.png')}
+            >
+              ⬇
+            </button>
+          </div>
+          <img src={shadowOnlyUrl || ''} alt="Shadow" className="result-image" />
         </div>
 
         <div className="result-item">
-          <h4>Shadow Only</h4>
-          <img src={shadowOnlyUrl || ''} alt="Shadow Only" className="result-image" />
-          <button
-            className="download-button"
-            onClick={() => shadowOnlyUrl && handleDownload(shadowOnlyUrl, 'shadow_only.png')}
-            disabled={!shadowOnlyUrl}
-          >
-            Download
-          </button>
-        </div>
-
-        <div className="result-item">
-          <h4>Mask Debug</h4>
-          <img src={maskDebugUrl || ''} alt="Mask Debug" className="result-image" />
-          <button
-            className="download-button"
-            onClick={() => maskDebugUrl && handleDownload(maskDebugUrl, 'mask_debug.png')}
-            disabled={!maskDebugUrl}
-          >
-            Download
-          </button>
+          <div className="result-header">
+            <span>Mask</span>
+            <button
+              className="download-btn small"
+              onClick={() => maskDebugUrl && handleDownload(maskDebugUrl, 'mask_debug.png')}
+            >
+              ⬇
+            </button>
+          </div>
+          <img src={maskDebugUrl || ''} alt="Mask" className="result-image" />
         </div>
       </div>
 
-      <style>{`
-        .result-display {
-          background: rgba(255, 255, 255, 0.1);
-          padding: 20px;
-          border-radius: 8px;
-          backdrop-filter: blur(10px);
-        }
-        .results-title {
-          color: white;
-          margin-bottom: 20px;
-          font-size: 18px;
-        }
-        .result-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-          gap: 20px;
-        }
-        .result-item {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-        .result-item h4 {
-          color: white;
-          font-size: 14px;
-          font-weight: 600;
-        }
-        .result-image {
-          width: 100%;
-          max-height: 300px;
-          object-fit: contain;
-          background: rgba(0, 0, 0, 0.3);
-          border-radius: 4px;
-        }
-        .download-button {
-          padding: 8px 16px;
-          background: rgba(59, 130, 246, 0.8);
-          color: white;
-          border: none;
-          border-radius: 4px;
-          cursor: pointer;
-          font-size: 14px;
-          transition: background 0.2s;
-        }
-        .download-button:hover:not(:disabled) {
-          background: rgba(59, 130, 246, 1);
-        }
-        .download-button:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-      `}</style>
+      <style>{styles}</style>
     </div>
   );
 };
+
+const styles = `
+  .result-display {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 16px;
+    border-radius: 8px;
+    backdrop-filter: blur(10px);
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .result-display.loading,
+  .result-display.empty {
+    align-items: center;
+    justify-content: center;
+    min-height: 300px;
+  }
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(255, 255, 255, 0.2);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  .result-display.loading p,
+  .result-display.empty p {
+    color: rgba(255, 255, 255, 0.7);
+    margin-top: 12px;
+    font-size: 14px;
+  }
+  .empty-icon {
+    font-size: 48px;
+    opacity: 0.5;
+  }
+  .results-title {
+    color: white;
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .main-result {
+    margin-bottom: 12px;
+  }
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .result-header span {
+    color: white;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .result-image {
+    width: 100%;
+    object-fit: contain;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
+  }
+  .result-image.main {
+    max-height: calc(100vh - 400px);
+    min-height: 200px;
+  }
+  .secondary-results {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .result-item .result-image {
+    max-height: 120px;
+  }
+  .download-btn {
+    padding: 4px 10px;
+    background: rgba(59, 130, 246, 0.8);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.2s;
+  }
+  .download-btn:hover {
+    background: rgba(59, 130, 246, 1);
+  }
+  .download-btn.small {
+    padding: 3px 8px;
+    font-size: 11px;
+  }
+`;

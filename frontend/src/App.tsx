@@ -8,8 +8,10 @@ import './App.css';
 function App() {
   const [foregroundFile, setForegroundFile] = useState<File | null>(null);
   const [backgroundFile, setBackgroundFile] = useState<File | null>(null);
+  const [depthMapFile, setDepthMapFile] = useState<File | null>(null);
   const [foregroundPreview, setForegroundPreview] = useState<string | null>(null);
   const [backgroundPreview, setBackgroundPreview] = useState<string | null>(null);
+  const [depthMapPreview, setDepthMapPreview] = useState<string | null>(null);
   const [lightAngle, setLightAngle] = useState(45);
   const [lightElevation, setLightElevation] = useState(30);
   const [compositeUrl, setCompositeUrl] = useState<string | null>(null);
@@ -17,31 +19,18 @@ function App() {
   const [maskDebugUrl, setMaskDebugUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [generateDepth, setGenerateDepth] = useState(false);
 
-  const handleForegroundSelect = (file: File | null) => {
-    setForegroundFile(file);
+  const handleFileSelect = (
+    setter: React.Dispatch<React.SetStateAction<File | null>>,
+    previewSetter: React.Dispatch<React.SetStateAction<string | null>>
+  ) => (file: File | null) => {
+    setter(file);
     if (file) {
       const reader = new FileReader();
-      reader.onload = (e) => {
-        setForegroundPreview(e.target?.result as string);
-      };
+      reader.onload = (e) => previewSetter(e.target?.result as string);
       reader.readAsDataURL(file);
     } else {
-      setForegroundPreview(null);
-    }
-  };
-
-  const handleBackgroundSelect = (file: File | null) => {
-    setBackgroundFile(file);
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setBackgroundPreview(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-    } else {
-      setBackgroundPreview(null);
+      previewSetter(null);
     }
   };
 
@@ -58,23 +47,18 @@ function App() {
     setMaskDebugUrl(null);
 
     try {
-      const response = await api.processImages(
+      await api.processImages(
         foregroundFile,
         backgroundFile,
         lightAngle,
         lightElevation,
-        undefined,
-        generateDepth
+        depthMapFile || undefined
       );
 
-      // Construct URLs for the output images
-      const compositeUrlFull = api.getOutputUrl('composite.png') + `?t=${Date.now()}`;
-      const shadowUrlFull = api.getOutputUrl('shadow_only.png') + `?t=${Date.now()}`;
-      const maskUrlFull = api.getOutputUrl('mask_debug.png') + `?t=${Date.now()}`;
-
-      setCompositeUrl(compositeUrlFull);
-      setShadowOnlyUrl(shadowUrlFull);
-      setMaskDebugUrl(maskUrlFull);
+      const timestamp = Date.now();
+      setCompositeUrl(api.getOutputUrl('composite.png') + `?t=${timestamp}`);
+      setShadowOnlyUrl(api.getOutputUrl('shadow_only.png') + `?t=${timestamp}`);
+      setMaskDebugUrl(api.getOutputUrl('mask_debug.png') + `?t=${timestamp}`);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to generate shadow');
       console.error('Error generating shadow:', err);
@@ -93,23 +77,29 @@ function App() {
 
         <div className="main-content">
           <div className="left-panel">
-            <div className="section">
+            <div className="upload-row">
               <ImageUpload
-                label="Foreground Image (Subject)"
-                onImageSelect={handleForegroundSelect}
+                label="Foreground (Subject)"
+                onImageSelect={handleFileSelect(setForegroundFile, setForegroundPreview)}
                 preview={foregroundPreview}
+                compact
               />
-            </div>
-
-            <div className="section">
               <ImageUpload
-                label="Background Image"
-                onImageSelect={handleBackgroundSelect}
+                label="Background"
+                onImageSelect={handleFileSelect(setBackgroundFile, setBackgroundPreview)}
                 preview={backgroundPreview}
+                compact
               />
             </div>
 
-            <div className="section">
+            <div className="controls-row">
+              <ImageUpload
+                label="Depth Map (Optional)"
+                onImageSelect={handleFileSelect(setDepthMapFile, setDepthMapPreview)}
+                preview={depthMapPreview}
+                compact
+                small
+              />
               <LightControls
                 lightAngle={lightAngle}
                 lightElevation={lightElevation}
@@ -118,30 +108,16 @@ function App() {
               />
             </div>
 
-            <div className="section">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={generateDepth}
-                  onChange={(e) => setGenerateDepth(e.target.checked)}
-                />
-                <span>Generate depth map automatically</span>
-              </label>
+            <div className="action-row">
+              <button
+                className="generate-button"
+                onClick={handleGenerate}
+                disabled={loading || !foregroundFile || !backgroundFile}
+              >
+                {loading ? 'Generating...' : '✨ Generate Shadow'}
+              </button>
+              {error && <div className="error-message">{error}</div>}
             </div>
-
-            <button
-              className="generate-button"
-              onClick={handleGenerate}
-              disabled={loading || !foregroundFile || !backgroundFile}
-            >
-              {loading ? 'Generating...' : 'Generate Shadow'}
-            </button>
-
-            {error && (
-              <div className="error-message">
-                {error}
-              </div>
-            )}
           </div>
 
           <div className="right-panel">

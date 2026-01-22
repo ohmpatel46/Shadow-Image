@@ -1,84 +1,88 @@
+* {
+  box-sizing: border-box;
+}
+
 .app {
   min-height: 100vh;
   width: 100%;
+  padding: 16px;
 }
 
 .container {
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 20px;
 }
 
 .header {
   text-align: center;
-  margin-bottom: 40px;
+  margin-bottom: 20px;
   color: white;
 }
 
 .header h1 {
-  font-size: 36px;
-  margin-bottom: 8px;
+  font-size: 28px;
+  margin-bottom: 4px;
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .header p {
-  font-size: 18px;
-  opacity: 0.9;
+  font-size: 14px;
+  opacity: 0.8;
+  margin: 0;
 }
 
 .main-content {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 30px;
+  gap: 20px;
+  height: calc(100vh - 120px);
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1200px) {
   .main-content {
     grid-template-columns: 1fr;
+    height: auto;
   }
 }
 
 .left-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr auto auto;
+  gap: 12px;
+}
+
+.upload-row {
+  display: contents;
+}
+
+.controls-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.action-row {
+  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
 }
 
 .right-panel {
   display: flex;
   flex-direction: column;
-}
-
-.section {
-  display: flex;
-  flex-direction: column;
-}
-
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: white;
-  cursor: pointer;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  backdrop-filter: blur(10px);
-}
-
-.checkbox-label input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
+  min-height: 0;
 }
 
 .generate-button {
-  padding: 16px 32px;
+  padding: 14px 24px;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 8px;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
@@ -96,10 +100,10 @@
 }
 
 .error-message {
-  padding: 12px;
+  padding: 10px;
   background: rgba(239, 68, 68, 0.2);
   border: 1px solid rgba(239, 68, 68, 0.5);
   border-radius: 4px;
   color: #fee2e2;
-  font-size: 14px;
+  font-size: 13px;
 }

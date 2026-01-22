@@ -1,20 +1,14 @@
-"""
-Shadow generation service for creating realistic shadows.
-"""
+"""Shadow generation service for creating realistic shadows."""
 import numpy as np
 from PIL import Image
 import cv2
 from typing import Tuple, Optional
-from scipy.ndimage import gaussian_filter, distance_transform_edt
+from scipy.ndimage import distance_transform_edt
 import math
 
 
 class ShadowGenerator:
     """Generates realistic shadows with contact shadow and soft falloff."""
-    
-    def __init__(self):
-        """Initialize the shadow generator."""
-        pass
     
     def generate_shadow(
         self,
@@ -25,395 +19,335 @@ class ShadowGenerator:
         depth_map: Optional[np.ndarray] = None,
         subject_x: int = 0,
         subject_y: int = 0,
-        contact_fade_distance: float = 50.0,
         max_shadow_distance: float = 300.0,
-        base_intensity: float = 0.8,
-        max_opacity: float = 0.6
+        base_intensity: float = 0.95,
+        max_opacity: float = 0.85
     ) -> np.ndarray:
         """
         Generate realistic shadow from subject mask.
         
-        Args:
-            subject_mask: Binary mask of the subject (0-255)
-            background_size: (width, height) of the background image
-            light_angle: Light direction angle in degrees (0-360)
-            light_elevation: Light elevation angle in degrees (0-90)
-            depth_map: Optional depth map for warping (0-255 grayscale)
-            contact_fade_distance: Distance for contact shadow fade
-            max_shadow_distance: Maximum shadow projection distance
-            base_intensity: Base intensity of contact shadow (0-1)
-            max_opacity: Maximum opacity of soft shadow (0-1)
-            
-        Returns:
-            Shadow as grayscale image (0-255)
+        Shadow projection uses cotangent of elevation angle:
+        - 0° elevation = very long shadows (horizontal light)
+        - 45° elevation = shadow length equals object height  
+        - 90° elevation = no shadow (overhead light)
         """
         bg_width, bg_height = background_size
         mask_height, mask_width = subject_mask.shape
         
-        # Convert mask to binary
         mask_binary = (subject_mask > 127).astype(np.uint8)
         
-        # Adjust subject position to ensure it fits
         subject_x = max(0, min(subject_x, bg_width - mask_width))
         subject_y = max(0, min(subject_y, bg_height - mask_height))
         
-        # Calculate shadow direction vector
+        # Calculate light direction
         angle_rad = math.radians(light_angle)
         elevation_rad = math.radians(light_elevation)
         
-        # 3D direction vector (x, y, z)
-        # x: horizontal component (cos of angle)
-        # y: vertical component (sin of angle)
-        # z: height component (tan of elevation)
-        shadow_dx = math.cos(angle_rad) * math.cos(elevation_rad)
-        shadow_dy = math.sin(angle_rad) * math.cos(elevation_rad)
-        shadow_dz = math.sin(elevation_rad)
+        light_dx = math.cos(angle_rad)
+        light_dy = math.sin(angle_rad)
         
-        # Project shadow onto ground plane
-        # Scale factor based on elevation (lower elevation = longer shadow)
-        if shadow_dz > 0.01:  # Avoid division by zero
-            scale_factor = shadow_dz
-        else:
-            scale_factor = 0.01
+        # Shadow length = cot(elevation) = cos/sin
+        elevation_sin = max(0.05, math.sin(elevation_rad))
+        elevation_cos = math.cos(elevation_rad)
+        projection_scale = min(elevation_cos / elevation_sin, 5.0)
         
-        # Calculate projection distance
-        shadow_length = max_shadow_distance / scale_factor
+        # Shadow direction is opposite to light direction
+        shadow_dir_x = -light_dx
+        shadow_dir_y = -light_dy
         
-        # Calculate offset for shadow projection
-        offset_x = int(shadow_dx * shadow_length)
-        offset_y = int(shadow_dy * shadow_length)
+        # Normalized direction for depth warping
+        light_dz = elevation_sin
+        norm = math.sqrt(light_dx**2 + light_dy**2 + light_dz**2)
+        shadow_dx = light_dx / norm if norm > 0 else light_dx
+        shadow_dy = light_dy / norm if norm > 0 else light_dy
         
-        # Create shadow canvas
+        estimated_subject_height = mask_height * 0.5
+        
         shadow = np.zeros((bg_height, bg_width), dtype=np.float32)
+        shadow_silhouette = np.zeros((bg_height, bg_width), dtype=np.uint8)
+        
+        # Find ground level (bottom of mask)
+        bottom_y = mask_height - 1
+        for y in range(mask_height - 1, -1, -1):
+            if np.any(mask_binary[y, :] > 0):
+                bottom_y = y
+                break
+        
+        ground_y_bg = subject_y + bottom_y
+        
+        # Project each mask point - higher points cast shadows further
+        for y in range(mask_height):
+            for x in range(mask_width):
+                if mask_binary[y, x] > 0:
+                    height_from_ground = max(0, (bottom_y - y) / max(1, bottom_y))
+                    shadow_offset = height_from_ground * projection_scale * estimated_subject_height
+                    
+                    bg_x = x + subject_x
+                    proj_x = bg_x + shadow_dir_x * shadow_offset
+                    proj_y = ground_y_bg + shadow_dir_y * shadow_offset
+                    
+                    if 0 <= proj_x < bg_width and 0 <= proj_y < bg_height:
+                        shadow_silhouette[int(proj_y), int(proj_x)] = 255
+        
+        # Fill gaps in shadow silhouette
+        kernel = np.ones((5, 5), np.uint8)
+        shadow_silhouette = cv2.dilate(shadow_silhouette, kernel, iterations=2)
+        shadow_silhouette = cv2.erode(shadow_silhouette, kernel, iterations=1)
         
         # Find contact points (bottom edge of subject)
         contact_points = self._find_contact_points(mask_binary)
         
-        # Project each contact point
+        # Create contact shadow (darkest near feet)
+        contact_shadow = np.zeros((bg_height, bg_width), dtype=np.float32)
+        contact_radius = 25
+        
         for y, x in contact_points:
-            # Adjust coordinates to background space
             bg_x = x + subject_x
             bg_y = y + subject_y
             
-            # Project this point along shadow direction
-            proj_x = bg_x + offset_x
-            proj_y = bg_y + offset_y
-            
-            # Check bounds
-            if 0 <= proj_x < bg_width and 0 <= proj_y < bg_height:
-                # Calculate distance from contact point
-                distance = math.sqrt(offset_x**2 + offset_y**2)
-                
-                # Contact shadow intensity (exponential falloff)
-                contact_intensity = base_intensity * math.exp(-distance / contact_fade_distance)
-                
-                # Add contact shadow (sharp, dark)
-                shadow[int(proj_y), int(proj_x)] = max(
-                    shadow[int(proj_y), int(proj_x)],
-                    contact_intensity * 255
-                )
+            for dy in range(-contact_radius, contact_radius + 5):
+                for dx in range(-contact_radius, contact_radius + 5):
+                    px = int(bg_x + dx + shadow_dir_x * 5)
+                    py = int(bg_y + dy + shadow_dir_y * 5)
+                    
+                    if 0 <= px < bg_width and 0 <= py < bg_height:
+                        dist = math.sqrt(dx*dx + dy*dy)
+                        if dist < contact_radius:
+                            intensity = 0.98 * math.exp(-dist / (contact_radius * 0.4))
+                            contact_shadow[py, px] = max(contact_shadow[py, px], intensity * 255)
         
-        # Project entire mask for soft shadow
-        # Create distance map from subject
-        distance_map = self._create_distance_map(mask_binary, offset_x, offset_y, bg_width, bg_height, subject_x, subject_y)
+        if np.any(contact_shadow > 0):
+            contact_shadow = cv2.GaussianBlur(contact_shadow, (7, 7), 2)
         
-        # Apply soft shadow falloff
-        soft_shadow = self._apply_soft_falloff(
-            distance_map,
-            max_shadow_distance,
-            max_opacity
+        shadow = np.maximum(shadow, contact_shadow)
+        
+        # Create distance map from contact line
+        distance_map = self._create_distance_map(
+            mask_binary, shadow_silhouette, bg_width, bg_height,
+            subject_x, subject_y, contact_points
         )
         
-        # Combine contact shadow and soft shadow
+        # Apply soft shadow falloff
+        soft_shadow = self._apply_soft_falloff(distance_map, max_shadow_distance, max_opacity)
+        
+        # Only apply soft shadow where shadow silhouette exists
+        shadow_mask = (shadow_silhouette > 0).astype(np.float32)
+        soft_shadow = soft_shadow * shadow_mask
+        
+        # Fallback if no shadow silhouette was created
+        if np.sum(shadow_silhouette > 0) == 0:
+            offset_x = int(shadow_dir_x * projection_scale * estimated_subject_height * 0.3)
+            offset_y = int(shadow_dir_y * projection_scale * estimated_subject_height * 0.3)
+            for y in range(mask_height):
+                for x in range(mask_width):
+                    if mask_binary[y, x] > 0:
+                        proj_x = x + subject_x + offset_x
+                        proj_y = y + subject_y + offset_y
+                        if 0 <= proj_x < bg_width and 0 <= proj_y < bg_height:
+                            shadow_silhouette[int(proj_y), int(proj_x)] = 255
+                            soft_shadow[int(proj_y), int(proj_x)] = max_opacity * 200
+        
         shadow = np.maximum(shadow, soft_shadow)
+        
+        # Fallback if shadow is still mostly empty
+        if np.sum(shadow > 10) < 100:
+            offset_x = int(shadow_dir_x * projection_scale * estimated_subject_height * 0.5)
+            offset_y = int(shadow_dir_y * projection_scale * estimated_subject_height * 0.5)
+            for y in range(mask_height):
+                for x in range(mask_width):
+                    if mask_binary[y, x] > 0:
+                        proj_x = x + subject_x + offset_x
+                        proj_y = y + subject_y + offset_y
+                        if 0 <= proj_x < bg_width and 0 <= proj_y < bg_height:
+                            shadow[int(proj_y), int(proj_x)] = max(
+                                shadow[int(proj_y), int(proj_x)],
+                                max_opacity * 200
+                            )
         
         # Apply depth warping if depth map provided
         if depth_map is not None:
-            shadow = self._apply_depth_warping(shadow, depth_map, shadow_dx, shadow_dy, shadow_dz)
+            shadow = self._apply_depth_warping(shadow, depth_map, shadow_dx, shadow_dy)
         
-        # Apply progressive blur based on distance
+        # Apply progressive blur
         shadow = self._apply_progressive_blur(shadow, distance_map, max_shadow_distance)
         
-        # Ensure shadow matches subject silhouette (no shadow where subject is)
-        # Create full-size mask at subject position
+        # Remove shadow where subject is
         full_mask = np.zeros((bg_height, bg_width), dtype=np.uint8)
         if subject_y + mask_height <= bg_height and subject_x + mask_width <= bg_width:
-            full_mask[subject_y:subject_y+mask_height, 
-                     subject_x:subject_x+mask_width] = mask_binary
-        
-        # Remove shadow where subject is
+            full_mask[subject_y:subject_y+mask_height, subject_x:subject_x+mask_width] = mask_binary
         shadow[full_mask > 0] = 0
         
-        # Clip to valid range
-        shadow = np.clip(shadow, 0, 255).astype(np.uint8)
-        
-        return shadow
+        return np.clip(shadow, 0, 255).astype(np.uint8)
     
     def _find_contact_points(self, mask: np.ndarray) -> list:
-        """
-        Find contact points (bottom edge) of the subject.
-        
-        Args:
-            mask: Binary mask
-            
-        Returns:
-            List of (y, x) contact point coordinates
-        """
+        """Find bottom edge points of subject."""
         contact_points = []
         height, width = mask.shape
-        
-        # For each column, find the bottommost point
         for x in range(width):
             for y in range(height - 1, -1, -1):
                 if mask[y, x] > 0:
                     contact_points.append((y, x))
                     break
-        
         return contact_points
     
     def _create_distance_map(
-        self,
-        mask: np.ndarray,
-        offset_x: int,
-        offset_y: int,
-        bg_width: int,
-        bg_height: int,
-        subject_x: int = 0,
-        subject_y: int = 0
+        self, mask: np.ndarray, shadow_silhouette: np.ndarray,
+        bg_width: int, bg_height: int, subject_x: int, subject_y: int,
+        contact_points: list
     ) -> np.ndarray:
-        """
-        Create distance map from subject to shadow projection points.
-        
-        Args:
-            mask: Subject mask
-            offset_x: Shadow offset in x direction
-            offset_y: Shadow offset in y direction
-            bg_width: Background width
-            bg_height: Background height
-            
-        Returns:
-            Distance map
-        """
+        """Create distance map from contact line for shadow gradient."""
         mask_height, mask_width = mask.shape
-        
-        # Create full-size canvas
         distance_map = np.full((bg_height, bg_width), float('inf'), dtype=np.float32)
         
-        # Project mask
-        for y in range(mask_height):
-            for x in range(mask_width):
-                if mask[y, x] > 0:
-                    # Adjust coordinates to background space
-                    bg_x = x + subject_x
-                    bg_y = y + subject_y
-                    
-                    proj_x = bg_x + offset_x
-                    proj_y = bg_y + offset_y
-                    
-                    if 0 <= proj_x < bg_width and 0 <= proj_y < bg_height:
-                        # Calculate distance from original point
-                        distance = math.sqrt(offset_x**2 + offset_y**2)
-                        if distance_map[proj_y, proj_x] > distance:
-                            distance_map[proj_y, proj_x] = distance
+        # Create contact line mask
+        contact_mask = np.zeros((bg_height, bg_width), dtype=np.uint8)
+        if contact_points:
+            for y, x in contact_points:
+                bg_x = x + subject_x
+                bg_y = y + subject_y
+                if 0 <= bg_x < bg_width and 0 <= bg_y < bg_height:
+                    for dy in range(-3, 4):
+                        if 0 <= bg_y + dy < bg_height:
+                            contact_mask[bg_y + dy, bg_x] = 255
         
-        # Fill infinite values with max distance
-        max_dist = math.sqrt(offset_x**2 + offset_y**2)
+        dist_from_contact = distance_transform_edt(~contact_mask.astype(bool))
+        
+        shadow_pixels = shadow_silhouette > 0
+        if np.any(shadow_pixels):
+            distance_map[shadow_pixels] = dist_from_contact[shadow_pixels]
+        
+        # Fill infinite values
+        max_dist = 300.0
+        if np.any(shadow_pixels):
+            valid_dists = dist_from_contact[shadow_pixels]
+            if len(valid_dists) > 0:
+                max_dist = np.max(valid_dists)
         distance_map[distance_map == float('inf')] = max_dist
         
         return distance_map
     
     def _apply_soft_falloff(
-        self,
-        distance_map: np.ndarray,
-        max_distance: float,
-        max_opacity: float
+        self, distance_map: np.ndarray, max_distance: float, max_opacity: float
     ) -> np.ndarray:
-        """
-        Apply soft shadow falloff based on distance.
+        """Apply opacity falloff - darkest at contact, lighter with distance."""
+        normalized_dist = np.clip(distance_map / max_distance, 0, 1)
         
-        Args:
-            distance_map: Distance from subject
-            max_distance: Maximum shadow distance
-            max_opacity: Maximum shadow opacity
-            
-        Returns:
-            Soft shadow image
-        """
-        # Normalize distance
-        normalized_distance = np.clip(distance_map / max_distance, 0, 1)
+        # Dark near contact, fading with distance
+        opacity = max_opacity * (1.0 - normalized_dist * 0.7)
+        contact_boost = np.exp(-normalized_dist * 3) * 0.3
+        opacity = np.clip(opacity + contact_boost, 0.1, 1.0)
         
-        # Exponential falloff
-        opacity = max_opacity * np.exp(-normalized_distance * 3)
-        
-        # Convert to 0-255
-        shadow = (opacity * 255).astype(np.uint8)
-        
-        return shadow
+        return (opacity * 255).astype(np.float32)
     
     def _apply_progressive_blur(
-        self,
-        shadow: np.ndarray,
-        distance_map: np.ndarray,
-        max_distance: float
+        self, shadow: np.ndarray, distance_map: np.ndarray, max_distance: float
     ) -> np.ndarray:
-        """
-        Apply progressive blur based on distance from subject.
-        
-        Args:
-            shadow: Shadow image
-            distance_map: Distance from subject
-            max_distance: Maximum shadow distance
-            
-        Returns:
-            Blurred shadow image
-        """
-        # Normalize distance
-        normalized_distance = np.clip(distance_map / max_distance, 0, 1)
-        
-        # Calculate blur radius (0 to 15 pixels)
-        blur_radius = normalized_distance * 15
-        
-        # Apply variable blur
-        # We'll use a simplified approach: apply different blur levels to different regions
+        """Apply increasing blur with distance from subject."""
+        normalized_dist = np.clip(distance_map / max_distance, 0, 1)
         shadow_float = shadow.astype(np.float32)
         
-        # Create blur levels
         blur_levels = [0, 3, 6, 9, 12, 15]
-        blurred_shadows = []
-        
-        for blur_level in blur_levels:
-            if blur_level == 0:
-                blurred_shadows.append(shadow_float)
+        blurred = []
+        for b in blur_levels:
+            if b == 0:
+                blurred.append(shadow_float.copy())
             else:
-                blurred = cv2.GaussianBlur(shadow_float, (blur_level*2+1, blur_level*2+1), blur_level)
-                blurred_shadows.append(blurred)
+                blurred.append(cv2.GaussianBlur(shadow_float, (b*2+1, b*2+1), b))
         
-        # Blend based on distance
-        result = np.zeros_like(shadow_float)
-        for i, blur_level in enumerate(blur_levels):
-            if i < len(blur_levels) - 1:
-                threshold_low = i / len(blur_levels)
-                threshold_high = (i + 1) / len(blur_levels)
-                mask = (normalized_distance >= threshold_low) & (normalized_distance < threshold_high)
-                
+        result = shadow_float.copy()
+        
+        for i in range(len(blur_levels)):
+            low = i / len(blur_levels)
+            high = (i + 1) / len(blur_levels)
+            mask = (normalized_dist >= low) & (normalized_dist < high)
+            
+            if np.any(mask):
                 if i < len(blur_levels) - 1:
-                    # Interpolate between blur levels
-                    t = (normalized_distance - threshold_low) / (threshold_high - threshold_low)
-                    blended = blurred_shadows[i] * (1 - t) + blurred_shadows[i + 1] * t
-                    result[mask] = blended[mask]
+                    t = np.clip((normalized_dist[mask] - low) / (high - low), 0, 1)
+                    result[mask] = blurred[i][mask] * (1 - t) + blurred[min(i+1, len(blurred)-1)][mask] * t
                 else:
-                    result[mask] = blurred_shadows[i][mask]
-            else:
-                mask = normalized_distance >= threshold_low
-                result[mask] = blurred_shadows[i][mask]
+                    result[mask] = blurred[i][mask]
+        
+        # Handle remaining pixels
+        remaining = normalized_dist >= 1.0
+        if np.any(remaining):
+            result[remaining] = blurred[-1][remaining]
         
         return np.clip(result, 0, 255).astype(np.uint8)
     
     def _apply_depth_warping(
-        self,
-        shadow: np.ndarray,
-        depth_map: np.ndarray,
-        shadow_dx: float,
-        shadow_dy: float,
-        shadow_dz: float
+        self, shadow: np.ndarray, depth_map: np.ndarray,
+        shadow_dx: float, shadow_dy: float
     ) -> np.ndarray:
-        """
-        Apply depth-based warping to shadow.
-        
-        Args:
-            shadow: Shadow image
-            depth_map: Depth map (0-255, higher = closer)
-            shadow_dx: Shadow direction x component
-            shadow_dy: Shadow direction y component
-            shadow_dz: Shadow direction z component
-            
-        Returns:
-            Warped shadow image
-        """
+        """Warp shadow based on depth map - higher surfaces offset shadow more."""
         height, width = shadow.shape
         
-        # Normalize depth map to 0-1 (invert so higher values = higher surfaces)
-        depth_normalized = (255 - depth_map.astype(np.float32)) / 255.0
+        # Resize depth map if needed
+        if depth_map.shape != shadow.shape:
+            depth_img = Image.fromarray(depth_map, mode='L')
+            depth_img = depth_img.resize((width, height), Image.LANCZOS)
+            depth_map = np.array(depth_img)
         
-        # Create warped shadow
-        warped_shadow = np.zeros_like(shadow, dtype=np.float32)
+        # Invert: higher depth values = higher surfaces
+        depth_norm = (255 - depth_map.astype(np.float32)) / 255.0
         
-        # Sample depth and adjust shadow position
+        warped = np.zeros_like(shadow, dtype=np.float32)
+        
         for y in range(height):
             for x in range(width):
                 if shadow[y, x] > 0:
-                    # Get depth at this point
-                    depth = depth_normalized[y, x]
-                    
-                    # Adjust shadow position based on depth
-                    # Higher surfaces cast shadows that are offset
-                    offset_factor = depth * 10  # Adjust this multiplier for effect strength
-                    
-                    new_x = int(x + shadow_dx * offset_factor)
-                    new_y = int(y + shadow_dy * offset_factor)
+                    offset = depth_norm[y, x] * 10
+                    new_x = int(x + shadow_dx * offset)
+                    new_y = int(y + shadow_dy * offset)
                     
                     if 0 <= new_x < width and 0 <= new_y < height:
-                        # Blend with existing shadow
-                        warped_shadow[new_y, new_x] = max(
-                            warped_shadow[new_y, new_x],
-                            shadow[y, x]
-                        )
+                        warped[new_y, new_x] = max(warped[new_y, new_x], shadow[y, x])
                     else:
-                        # Keep original if out of bounds
-                        warped_shadow[y, x] = max(warped_shadow[y, x], shadow[y, x])
+                        warped[y, x] = max(warped[y, x], shadow[y, x])
         
-        return np.clip(warped_shadow, 0, 255).astype(np.uint8)
+        return np.clip(warped, 0, 255).astype(np.uint8)
     
     def composite_images(
-        self,
-        foreground: Image.Image,
-        background: Image.Image,
-        shadow: np.ndarray,
-        subject_x: int = 0,
-        subject_y: int = 0
+        self, foreground: Image.Image, background: Image.Image,
+        shadow: np.ndarray, subject_x: int = 0, subject_y: int = 0
     ) -> Image.Image:
-        """
-        Composite foreground, shadow, and background images.
-        
-        Args:
-            foreground: Foreground image with alpha channel
-            background: Background image
-            shadow: Shadow as numpy array
-            
-        Returns:
-            Composite image
-        """
-        # Convert to numpy arrays
+        """Composite foreground, shadow, and background."""
         bg_array = np.array(background.convert('RGB'))
         fg_array = np.array(foreground.convert('RGBA'))
-        shadow_3d = np.stack([shadow, shadow, shadow], axis=2)  # Convert to RGB
         
-        # Place foreground at specified position
         fg_height, fg_width = fg_array.shape[:2]
         bg_height, bg_width = bg_array.shape[:2]
         
-        # Ensure foreground fits
-        if subject_x + fg_width > bg_width:
-            fg_width = bg_width - subject_x
-        if subject_y + fg_height > bg_height:
-            fg_height = bg_height - subject_y
+        subject_x = max(0, min(subject_x, bg_width - 1))
+        subject_y = max(0, min(subject_y, bg_height - 1))
+        fg_width = min(fg_width, bg_width - subject_x)
+        fg_height = min(fg_height, bg_height - subject_y)
         
-        # Create composite
         composite = bg_array.copy().astype(np.float32)
         
+        # Ensure shadow has correct dimensions
+        if len(shadow.shape) != 2:
+            raise ValueError(f"Shadow must be 2D, got shape {shadow.shape}")
+        
+        if shadow.shape != (bg_height, bg_width):
+            shadow_img = Image.fromarray(shadow, mode='L')
+            shadow_img = shadow_img.resize((bg_width, bg_height), Image.LANCZOS)
+            shadow = np.array(shadow_img)
+        
         # Apply shadow (darken background)
-        shadow_mask = shadow > 0
-        shadow_intensity = shadow.astype(np.float32) / 255.0
-        composite[shadow_mask] = composite[shadow_mask] * (1 - shadow_intensity[shadow_mask, np.newaxis] * 0.7)
+        if np.any(shadow > 0):
+            shadow_intensity = shadow.astype(np.float32) / 255.0
+            shadow_factor = 1 - shadow_intensity[:, :, np.newaxis] * 0.7
+            composite = composite * shadow_factor
         
         # Composite foreground
-        if subject_x >= 0 and subject_y >= 0:
+        if subject_x >= 0 and subject_y >= 0 and fg_width > 0 and fg_height > 0:
             fg_region = fg_array[:fg_height, :fg_width]
             alpha = fg_region[:, :, 3:4].astype(np.float32) / 255.0
             
+            bg_region = composite[subject_y:subject_y+fg_height, subject_x:subject_x+fg_width]
             composite[subject_y:subject_y+fg_height, subject_x:subject_x+fg_width] = (
-                composite[subject_y:subject_y+fg_height, subject_x:subject_x+fg_width] * (1 - alpha) +
-                fg_region[:, :, :3] * alpha
+                bg_region * (1 - alpha) + fg_region[:, :, :3] * alpha
             )
         
         return Image.fromarray(np.clip(composite, 0, 255).astype(np.uint8))
